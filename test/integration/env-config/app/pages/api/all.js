@@ -1,6 +1,8 @@
 const variables = [
   'PROCESS_ENV_KEY',
   'ENV_FILE_KEY',
+  'ENV_FILE_EMPTY_FIRST',
+  'ENV_FILE_PROCESS_ENV',
   'LOCAL_ENV_FILE_KEY',
   'ENV_FILE_LOCAL_OVERRIDE_TEST',
   'PRODUCTION_ENV_FILE_KEY',
@@ -15,11 +17,15 @@ const variables = [
   'LOCAL_TEST_ENV_FILE_KEY',
   'ENV_FILE_TEST_OVERRIDE_TEST',
   'ENV_FILE_TEST_LOCAL_OVERRIDEOVERRIDE_TEST',
+  'ENV_FILE_EXPANDED',
+  'ENV_FILE_EXPANDED_CONCAT',
+  'ENV_FILE_EXPANDED_ESCAPED',
+  'ENV_FILE_KEY_EXCLAMATION',
 ]
 
 const items = {}
 
-variables.forEach(variable => {
+variables.forEach((variable) => {
   items[variable] = process.env[variable]
 })
 

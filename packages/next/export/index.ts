@@ -1,10 +1,9 @@
 import chalk from 'next/dist/compiled/chalk'
 import findUp from 'next/dist/compiled/find-up'
 import {
-  copyFile as copyFileOrig,
+  promises,
   existsSync,
   exists as existsOrig,
-  mkdir as mkdirOrig,
   readFileSync,
   writeFileSync,
 } from 'fs'
@@ -13,8 +12,9 @@ import { cpus } from 'os'
 import { dirname, join, resolve, sep } from 'path'
 import { promisify } from 'util'
 import { AmpPageStatus, formatAmpMessages } from '../build/output/index'
+import * as Log from '../build/output/log'
 import createSpinner from '../build/spinner'
-import { API_ROUTE } from '../lib/constants'
+import { API_ROUTE, SSG_FALLBACK_EXPORT_ERROR } from '../lib/constants'
 import { recursiveCopy } from '../lib/recursive-copy'
 import { recursiveDelete } from '../lib/recursive-delete'
 import {
@@ -34,14 +34,34 @@ import loadConfig, {
 } from '../next-server/server/config'
 import { eventCliSession } from '../telemetry/events'
 import { Telemetry } from '../telemetry/storage'
-import { normalizePagePath } from '../next-server/server/normalize-page-path'
+import {
+  normalizePagePath,
+  denormalizePagePath,
+} from '../next-server/server/normalize-page-path'
 import { loadEnvConfig } from '../lib/load-env-config'
+import { PrerenderManifest } from '../build'
+import type exportPage from './worker'
+import { PagesManifest } from '../build/webpack/plugins/pages-manifest-plugin'
+import { getPagePath } from '../next-server/server/require'
 
-const copyFile = promisify(copyFileOrig)
-const mkdir = promisify(mkdirOrig)
 const exists = promisify(existsOrig)
 
+function divideSegments(number: number, segments: number): number[] {
+  const result = []
+  while (number > 0 && segments > 0) {
+    const dividedNumber = Math.floor(number / segments)
+    number -= dividedNumber
+    segments--
+    result.push(dividedNumber)
+  }
+  return result
+}
+
 const createProgress = (total: number, label = 'Exporting') => {
+  const segments = divideSegments(total, 4)
+
+  let currentSegmentTotal = segments.shift()
+  let currentSegmentCount = 0
   let curProgress = 0
   let progressSpinner = createSpinner(`${label} (${curProgress}/${total})`, {
     spinner: {
@@ -68,6 +88,15 @@ const createProgress = (total: number, label = 'Exporting') => {
 
   return () => {
     curProgress++
+    currentSegmentCount++
+
+    // Make sure we only log once per fully generated segment
+    if (currentSegmentCount !== currentSegmentTotal) {
+      return
+    }
+
+    currentSegmentTotal = segments.shift()
+    currentSegmentCount = 0
 
     const newText = `${label} (${curProgress}/${total})`
     if (progressSpinner) {
@@ -87,19 +116,25 @@ type ExportPathMap = {
   [page: string]: { page: string; query?: { [key: string]: string } }
 }
 
-export default async function(
+interface ExportOptions {
+  outdir: string
+  silent?: boolean
+  threads?: number
+  pages?: string[]
+  buildExport?: boolean
+  statusMessage?: string
+}
+
+export default async function exportApp(
   dir: string,
-  options: any,
+  options: ExportOptions,
   configuration?: any
 ): Promise<void> {
-  function log(message: string) {
-    if (options.silent) {
-      return
-    }
-    console.log(message)
-  }
-
   dir = resolve(dir)
+
+  // attempt to load global env values so they are available in next.config.js
+  loadEnvConfig(dir)
+
   const nextConfig = configuration || loadConfig(PHASE_EXPORT, dir)
   const threads = options.threads || Math.max(cpus().length - 1, 1)
   const distDir = join(dir, nextConfig.distDir)
@@ -117,10 +152,12 @@ export default async function(
     )
   }
 
-  const subFolders = nextConfig.exportTrailingSlash
+  const subFolders = nextConfig.trailingSlash
   const isLikeServerless = nextConfig.target !== 'server'
 
-  log(`> using build directory: ${distDir}`)
+  if (!options.silent && !options.buildExport) {
+    Log.info(`using build directory: ${distDir}`)
+  }
 
   if (!existsSync(distDir)) {
     throw new Error(
@@ -131,25 +168,18 @@ export default async function(
   const buildId = readFileSync(join(distDir, BUILD_ID_FILE), 'utf8')
   const pagesManifest =
     !options.pages &&
-    require(join(
+    (require(join(
       distDir,
       isLikeServerless ? SERVERLESS_DIRECTORY : SERVER_DIRECTORY,
       PAGES_MANIFEST
-    ))
+    )) as PagesManifest)
 
-  let prerenderManifest
+  let prerenderManifest: PrerenderManifest | undefined = undefined
   try {
     prerenderManifest = require(join(distDir, PRERENDER_MANIFEST))
   } catch (_) {}
 
-  const distPagesDir = join(
-    distDir,
-    isLikeServerless
-      ? SERVERLESS_DIRECTORY
-      : join(SERVER_DIRECTORY, 'static', buildId),
-    'pages'
-  )
-
+  const excludedPrerenderRoutes = new Set<string>()
   const pages = options.pages || Object.keys(pagesManifest)
   const defaultPathMap: ExportPathMap = {}
   let hasApiRoutes = false
@@ -173,6 +203,7 @@ export default async function(
     // could run `getStaticProps`. If users make their page work lazily, they
     // can manually add it to the `exportPathMap`.
     if (prerenderManifest?.dynamicRoutes[page]) {
+      excludedPrerenderRoutes.add(page)
       continue
     }
 
@@ -184,12 +215,12 @@ export default async function(
 
   if (outDir === join(dir, 'public')) {
     throw new Error(
-      `The 'public' directory is reserved in Next.js and can not be used as the export out directory. https://err.sh/zeit/next.js/can-not-output-to-public`
+      `The 'public' directory is reserved in Next.js and can not be used as the export out directory. https://err.sh/vercel/next.js/can-not-output-to-public`
     )
   }
 
   await recursiveDelete(join(outDir))
-  await mkdir(join(outDir, '_next', buildId), { recursive: true })
+  await promises.mkdir(join(outDir, '_next', buildId), { recursive: true })
 
   writeFileSync(
     join(distDir, EXPORT_DETAIL),
@@ -203,13 +234,20 @@ export default async function(
 
   // Copy static directory
   if (!options.buildExport && existsSync(join(dir, 'static'))) {
-    log('  copying "static" directory')
+    if (!options.silent) {
+      Log.info('Copying "static" directory')
+    }
     await recursiveCopy(join(dir, 'static'), join(outDir, 'static'))
   }
 
   // Copy .next/static directory
-  if (existsSync(join(distDir, CLIENT_STATIC_FILES_PATH))) {
-    log('  copying "static build" directory')
+  if (
+    !options.buildExport &&
+    existsSync(join(distDir, CLIENT_STATIC_FILES_PATH))
+  ) {
+    if (!options.silent) {
+      Log.info('Copying "static build" directory')
+    }
     await recursiveCopy(
       join(distDir, CLIENT_STATIC_FILES_PATH),
       join(outDir, '_next', CLIENT_STATIC_FILES_PATH)
@@ -218,15 +256,15 @@ export default async function(
 
   // Get the exportPathMap from the config file
   if (typeof nextConfig.exportPathMap !== 'function') {
-    console.log(
-      `> No "exportPathMap" found in "${CONFIG_FILE}". Generating map from "./pages"`
-    )
+    if (!options.silent) {
+      Log.info(
+        `No "exportPathMap" found in "${CONFIG_FILE}". Generating map from "./pages"`
+      )
+    }
     nextConfig.exportPathMap = async (defaultMap: ExportPathMap) => {
       return defaultMap
     }
   }
-
-  loadEnvConfig(dir)
 
   // Start the rendering process
   const renderOpts = {
@@ -236,8 +274,8 @@ export default async function(
     assetPrefix: nextConfig.assetPrefix.replace(/\/$/, ''),
     distDir,
     dev: false,
-    staticMarkup: false,
     hotReloader: null,
+    basePath: nextConfig.basePath,
     canonicalBase: nextConfig.amp?.canonicalBase || '',
     isModern: nextConfig.experimental.modern,
     ampValidatorPath: nextConfig.experimental.amp?.validator || undefined,
@@ -256,7 +294,9 @@ export default async function(
     nextExport: true,
   }
 
-  log(`  launching ${threads} workers`)
+  if (!options.silent && !options.buildExport) {
+    Log.info(`Launching ${threads} workers`)
+  }
   const exportPathMap = await nextConfig.exportPathMap(defaultPathMap, {
     dev: false,
     dir,
@@ -264,44 +304,85 @@ export default async function(
     distDir,
     buildId,
   })
+
   if (!exportPathMap['/404'] && !exportPathMap['/404.html']) {
     exportPathMap['/404'] = exportPathMap['/404.html'] = {
       page: '/_error',
     }
   }
-  const exportPaths = Object.keys(exportPathMap)
+
+  // make sure to prevent duplicates
+  const exportPaths = [
+    ...new Set(
+      Object.keys(exportPathMap).map((path) =>
+        denormalizePagePath(normalizePagePath(path))
+      )
+    ),
+  ]
+
   const filteredPaths = exportPaths.filter(
     // Remove API routes
-    route => !exportPathMap[route].page.match(API_ROUTE)
+    (route) => !exportPathMap[route].page.match(API_ROUTE)
   )
 
   if (filteredPaths.length !== exportPaths.length) {
     hasApiRoutes = true
   }
 
+  if (prerenderManifest && !options.buildExport) {
+    const fallbackEnabledPages = new Set()
+
+    for (const key of Object.keys(prerenderManifest.dynamicRoutes)) {
+      // only error if page is included in path map
+      if (!exportPathMap[key] && !excludedPrerenderRoutes.has(key)) {
+        continue
+      }
+
+      if (prerenderManifest.dynamicRoutes[key].fallback !== false) {
+        fallbackEnabledPages.add(key)
+      }
+    }
+
+    if (fallbackEnabledPages.size) {
+      throw new Error(
+        `Found pages with \`fallback\` enabled:\n${[
+          ...fallbackEnabledPages,
+        ].join('\n')}\n${SSG_FALLBACK_EXPORT_ERROR}\n`
+      )
+    }
+  }
+
   // Warn if the user defines a path for an API page
   if (hasApiRoutes) {
-    log(
-      chalk.bold.red(`Attention`) +
-        ': ' +
+    if (!options.silent) {
+      Log.warn(
         chalk.yellow(
           `Statically exporting a Next.js application via \`next export\` disables API routes.`
         ) +
-        `\n` +
-        chalk.yellow(
-          `This command is meant for static-only hosts, and is` +
-            ' ' +
-            chalk.bold(`not necessary to make your application static.`)
-        ) +
-        `\n` +
-        chalk.yellow(
-          `Pages in your application without server-side data dependencies will be automatically statically exported by \`next build\`, including pages powered by \`getStaticProps\`.`
-        ) +
-        `\nLearn more: https://err.sh/zeit/next.js/api-routes-static-export`
-    )
+          `\n` +
+          chalk.yellow(
+            `This command is meant for static-only hosts, and is` +
+              ' ' +
+              chalk.bold(`not necessary to make your application static.`)
+          ) +
+          `\n` +
+          chalk.yellow(
+            `Pages in your application without server-side data dependencies will be automatically statically exported by \`next build\`, including pages powered by \`getStaticProps\`.`
+          ) +
+          `\n` +
+          chalk.yellow(
+            `Learn more: https://err.sh/vercel/next.js/api-routes-static-export`
+          )
+      )
+    }
   }
 
-  const progress = !options.silent && createProgress(filteredPaths.length)
+  const progress =
+    !options.silent &&
+    createProgress(
+      filteredPaths.length,
+      `${Log.prefixes.info} ${options.statusMessage}`
+    )
   const pagesDataDir = options.buildExport
     ? outDir
     : join(outDir, '_next/data', buildId)
@@ -312,7 +393,9 @@ export default async function(
   const publicDir = join(dir, CLIENT_PUBLIC_FILES_PATH)
   // Copy public directory
   if (!options.buildExport && existsSync(publicDir)) {
-    log('  copying "public" directory')
+    if (!options.silent) {
+      Log.info('Copying "public" directory')
+    }
     await recursiveCopy(publicDir, outDir, {
       filter(path) {
         // Exclude paths used by pages
@@ -321,28 +404,25 @@ export default async function(
     })
   }
 
-  const worker: Worker & { default: Function } = new Worker(
-    require.resolve('./worker'),
-    {
-      maxRetries: 0,
-      numWorkers: threads,
-      enableWorkerThreads: nextConfig.experimental.workerThreads,
-      exposedMethods: ['default'],
-    }
-  ) as any
+  const worker = new Worker(require.resolve('./worker'), {
+    maxRetries: 0,
+    numWorkers: threads,
+    enableWorkerThreads: nextConfig.experimental.workerThreads,
+    exposedMethods: ['default'],
+  }) as Worker & { default: typeof exportPage }
 
   worker.getStdout().pipe(process.stdout)
   worker.getStderr().pipe(process.stderr)
 
   let renderError = false
+  const errorPaths: string[] = []
 
   await Promise.all(
-    filteredPaths.map(async path => {
+    filteredPaths.map(async (path) => {
       const result = await worker.default({
         path,
         pathMap: exportPathMap[path],
         distDir,
-        buildId,
         outDir,
         pagesDataDir,
         renderOpts,
@@ -350,16 +430,20 @@ export default async function(
         subFolders,
         buildExport: options.buildExport,
         serverless: isTargetLikeServerless(nextConfig.target),
+        optimizeFonts: nextConfig.experimental.optimizeFonts,
+        optimizeImages: nextConfig.experimental.optimizeImages,
       })
 
       for (const validation of result.ampValidations || []) {
-        const { page, result } = validation
-        ampValidations[page] = result
+        const { page, result: ampValidationResult } = validation
+        ampValidations[page] = ampValidationResult
         hadValidationError =
           hadValidationError ||
-          (Array.isArray(result?.errors) && result.errors.length > 0)
+          (Array.isArray(ampValidationResult?.errors) &&
+            ampValidationResult.errors.length > 0)
       }
       renderError = renderError || !!result.error
+      if (!!result.error) errorPaths.push(path)
 
       if (
         options.buildExport &&
@@ -377,8 +461,22 @@ export default async function(
   // copy prerendered routes to outDir
   if (!options.buildExport && prerenderManifest) {
     await Promise.all(
-      Object.keys(prerenderManifest.routes).map(async route => {
+      Object.keys(prerenderManifest.routes).map(async (route) => {
+        const { srcRoute } = prerenderManifest!.routes[route]
+        const pageName = srcRoute || route
+        const pagePath = getPagePath(pageName, distDir, isLikeServerless)
+        const distPagesDir = join(
+          pagePath,
+          // strip leading / and then recurse number of nested dirs
+          // to place from base folder
+          pageName
+            .substr(1)
+            .split('/')
+            .map(() => '..')
+            .join('/')
+        )
         route = normalizePagePath(route)
+
         const orig = join(distPagesDir, route)
         const htmlDest = join(
           outDir,
@@ -392,14 +490,14 @@ export default async function(
         )
         const jsonDest = join(pagesDataDir, `${route}.json`)
 
-        await mkdir(dirname(htmlDest), { recursive: true })
-        await mkdir(dirname(jsonDest), { recursive: true })
-        await copyFile(`${orig}.html`, htmlDest)
-        await copyFile(`${orig}.json`, jsonDest)
+        await promises.mkdir(dirname(htmlDest), { recursive: true })
+        await promises.mkdir(dirname(jsonDest), { recursive: true })
+        await promises.copyFile(`${orig}.html`, htmlDest)
+        await promises.copyFile(`${orig}.json`, jsonDest)
 
         if (await exists(`${orig}.amp.html`)) {
-          await mkdir(dirname(ampHtmlDest), { recursive: true })
-          await copyFile(`${orig}.amp.html`, ampHtmlDest)
+          await promises.mkdir(dirname(ampHtmlDest), { recursive: true })
+          await promises.copyFile(`${orig}.amp.html`, ampHtmlDest)
         }
       })
     )
@@ -410,15 +508,17 @@ export default async function(
   }
   if (hadValidationError) {
     throw new Error(
-      `AMP Validation caused the export to fail. https://err.sh/zeit/next.js/amp-export-validation`
+      `AMP Validation caused the export to fail. https://err.sh/vercel/next.js/amp-export-validation`
     )
   }
 
   if (renderError) {
-    throw new Error(`Export encountered errors`)
+    throw new Error(
+      `Export encountered errors on following paths:\n\t${errorPaths
+        .sort()
+        .join('\n\t')}`
+    )
   }
-  // Add an empty line to the console for the better readability.
-  log('')
 
   writeFileSync(
     join(distDir, EXPORT_DETAIL),

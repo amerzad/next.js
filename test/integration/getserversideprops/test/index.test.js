@@ -1,5 +1,5 @@
 /* eslint-env jest */
-/* global jasmine */
+
 import cheerio from 'cheerio'
 import escapeRegex from 'escape-string-regexp'
 import fs from 'fs-extra'
@@ -7,7 +7,9 @@ import {
   check,
   fetchViaHTTP,
   findPort,
+  File,
   getBrowserBodyText,
+  getRedboxHeader,
   killApp,
   launchApp,
   nextBuild,
@@ -19,9 +21,10 @@ import {
 import webdriver from 'next-webdriver'
 import { join } from 'path'
 
-jasmine.DEFAULT_TIMEOUT_INTERVAL = 1000 * 60 * 2
+jest.setTimeout(1000 * 60 * 2)
 const appDir = join(__dirname, '..')
-const nextConfig = join(appDir, 'next.config.js')
+const nextConfig = new File(join(appDir, 'next.config.js'))
+
 let app
 let appPort
 let buildId
@@ -47,24 +50,43 @@ const expectedManifestRoutes = () => [
     page: '/blog',
   },
   {
+    namedDataRouteRegex: `^/_next/data/${escapeRegex(
+      buildId
+    )}/blog/(?<post>[^/]+?)\\.json$`,
     dataRouteRegex: normalizeRegEx(
       `^\\/_next\\/data\\/${escapeRegex(buildId)}\\/blog\\/([^\\/]+?)\\.json$`
     ),
     page: '/blog/[post]',
+    routeKeys: {
+      post: 'post',
+    },
   },
   {
+    namedDataRouteRegex: `^/_next/data/${escapeRegex(
+      buildId
+    )}/blog/(?<post>[^/]+?)/(?<comment>[^/]+?)\\.json$`,
     dataRouteRegex: normalizeRegEx(
       `^\\/_next\\/data\\/${escapeRegex(
         buildId
       )}\\/blog\\/([^\\/]+?)\\/([^\\/]+?)\\.json$`
     ),
     page: '/blog/[post]/[comment]',
+    routeKeys: {
+      post: 'post',
+      comment: 'comment',
+    },
   },
   {
+    namedDataRouteRegex: `^/_next/data/${escapeRegex(
+      buildId
+    )}/catchall/(?<path>.+?)\\.json$`,
     dataRouteRegex: normalizeRegEx(
       `^\\/_next\\/data\\/${escapeRegex(buildId)}\\/catchall\\/(.+?)\\.json$`
     ),
     page: '/catchall/[...path]',
+    routeKeys: {
+      path: 'path',
+    },
   },
   {
     dataRouteRegex: normalizeRegEx(
@@ -98,17 +120,29 @@ const expectedManifestRoutes = () => [
   },
   {
     dataRouteRegex: normalizeRegEx(
+      `^\\/_next\\/data\\/${escapeRegex(buildId)}\\/refresh.json$`
+    ),
+    page: '/refresh',
+  },
+  {
+    dataRouteRegex: normalizeRegEx(
       `^\\/_next\\/data\\/${escapeRegex(buildId)}\\/something.json$`
     ),
     page: '/something',
   },
   {
+    namedDataRouteRegex: `^/_next/data/${escapeRegex(
+      buildId
+    )}/user/(?<user>[^/]+?)/profile\\.json$`,
     dataRouteRegex: normalizeRegEx(
       `^\\/_next\\/data\\/${escapeRegex(
         buildId
       )}\\/user\\/([^\\/]+?)\\/profile\\.json$`
     ),
     page: '/user/[user]/profile',
+    routeKeys: {
+      user: 'user',
+    },
   },
 ]
 
@@ -123,7 +157,7 @@ const navigateTest = (dev = false) => {
       '/blog/post-1/comment-1',
     ]
 
-    await Promise.all(toBuild.map(pg => renderViaHTTP(appPort, pg)))
+    await Promise.all(toBuild.map((pg) => renderViaHTTP(appPort, pg)))
 
     const browser = await webdriver(appPort, '/')
     let text = await browser.elementByCss('p').text()
@@ -263,12 +297,29 @@ const runTests = (dev = false) => {
   it('should have original req.url for /_next/data request dynamic page', async () => {
     const curUrl = `/_next/data/${buildId}/blog/post-1.json`
     const data = await renderViaHTTP(appPort, curUrl)
-    const { appProps } = JSON.parse(data)
+    const { appProps, pageProps } = JSON.parse(data)
+
+    expect(pageProps.resolvedUrl).toEqual('/blog/post-1')
 
     expect(appProps).toEqual({
       url: curUrl,
       query: { post: 'post-1' },
-      asPath: curUrl,
+      asPath: '/blog/post-1',
+      pathname: '/blog/[post]',
+    })
+  })
+
+  it('should have original req.url for /_next/data request dynamic page with query', async () => {
+    const curUrl = `/_next/data/${buildId}/blog/post-1.json`
+    const data = await renderViaHTTP(appPort, curUrl, { hello: 'world' })
+    const { appProps, pageProps } = JSON.parse(data)
+
+    expect(pageProps.resolvedUrl).toEqual('/blog/post-1?hello=world')
+
+    expect(appProps).toEqual({
+      url: curUrl + '?hello=world',
+      query: { post: 'post-1', hello: 'world' },
+      asPath: '/blog/post-1?hello=world',
       pathname: '/blog/[post]',
     })
   })
@@ -276,12 +327,29 @@ const runTests = (dev = false) => {
   it('should have original req.url for /_next/data request', async () => {
     const curUrl = `/_next/data/${buildId}/something.json`
     const data = await renderViaHTTP(appPort, curUrl)
-    const { appProps } = JSON.parse(data)
+    const { appProps, pageProps } = JSON.parse(data)
+
+    expect(pageProps.resolvedUrl).toEqual('/something')
 
     expect(appProps).toEqual({
       url: curUrl,
       query: {},
-      asPath: curUrl,
+      asPath: '/something',
+      pathname: '/something',
+    })
+  })
+
+  it('should have original req.url for /_next/data request with query', async () => {
+    const curUrl = `/_next/data/${buildId}/something.json`
+    const data = await renderViaHTTP(appPort, curUrl, { hello: 'world' })
+    const { appProps, pageProps } = JSON.parse(data)
+
+    expect(pageProps.resolvedUrl).toEqual('/something?hello=world')
+
+    expect(appProps).toEqual({
+      url: curUrl + '?hello=world',
+      query: { hello: 'world' },
+      asPath: '/something?hello=world',
       pathname: '/something',
     })
   })
@@ -291,6 +359,55 @@ const runTests = (dev = false) => {
     const $ = cheerio.load(html)
     expect($('#app-url').text()).toContain('/blog/post-1')
     expect(JSON.parse($('#app-query').text())).toEqual({ post: 'post-1' })
+    expect($('#resolved-url').text()).toBe('/blog/post-1')
+    expect($('#as-path').text()).toBe('/blog/post-1')
+  })
+
+  it('should have correct req.url and query for direct visit dynamic page rewrite direct', async () => {
+    const html = await renderViaHTTP(appPort, '/blog-post-1')
+    const $ = cheerio.load(html)
+    expect($('#app-url').text()).toContain('/blog-post-1')
+    expect(JSON.parse($('#app-query').text())).toEqual({ post: 'post-1' })
+    expect($('#resolved-url').text()).toBe('/blog/post-1')
+    expect($('#as-path').text()).toBe('/blog-post-1')
+  })
+
+  it('should have correct req.url and query for direct visit dynamic page rewrite direct with internal query', async () => {
+    const html = await renderViaHTTP(appPort, '/blog-post-2')
+    const $ = cheerio.load(html)
+    expect($('#app-url').text()).toContain('/blog-post-2')
+    expect(JSON.parse($('#app-query').text())).toEqual({
+      post: 'post-2',
+      hello: 'world',
+    })
+    expect($('#resolved-url').text()).toBe('/blog/post-2')
+    expect($('#as-path').text()).toBe('/blog-post-2')
+  })
+
+  it('should have correct req.url and query for direct visit dynamic page rewrite param', async () => {
+    const html = await renderViaHTTP(appPort, '/blog-post-3')
+    const $ = cheerio.load(html)
+    expect($('#app-url').text()).toContain('/blog-post-3')
+    expect(JSON.parse($('#app-query').text())).toEqual({
+      post: 'post-3',
+      param: 'post-3',
+    })
+    expect($('#resolved-url').text()).toBe('/blog/post-3')
+    expect($('#as-path').text()).toBe('/blog-post-3')
+  })
+
+  it('should have correct req.url and query for direct visit dynamic page with query', async () => {
+    const html = await renderViaHTTP(appPort, '/blog/post-1', {
+      hello: 'world',
+    })
+    const $ = cheerio.load(html)
+    expect($('#app-url').text()).toContain('/blog/post-1?hello=world')
+    expect(JSON.parse($('#app-query').text())).toEqual({
+      post: 'post-1',
+      hello: 'world',
+    })
+    expect($('#resolved-url').text()).toBe('/blog/post-1?hello=world')
+    expect($('#as-path').text()).toBe('/blog/post-1?hello=world')
   })
 
   it('should have correct req.url and query for direct visit', async () => {
@@ -298,6 +415,8 @@ const runTests = (dev = false) => {
     const $ = cheerio.load(html)
     expect($('#app-url').text()).toContain('/something')
     expect(JSON.parse($('#app-query').text())).toEqual({})
+    expect($('#resolved-url').text()).toBe('/something')
+    expect($('#as-path').text()).toBe('/something')
   })
 
   it('should return data correctly', async () => {
@@ -335,6 +454,17 @@ const runTests = (dev = false) => {
     expect(text).toMatch(/a normal page/)
   })
 
+  it('should load a fast refresh page', async () => {
+    const browser = await webdriver(appPort, '/refresh')
+    expect(
+      await check(
+        () => browser.elementByCss('p').text(),
+        /client loaded/,
+        false
+      )
+    ).toBe(true)
+  })
+
   it('should provide correct query value for dynamic page', async () => {
     const html = await renderViaHTTP(
       appPort,
@@ -370,8 +500,13 @@ const runTests = (dev = false) => {
     await waitFor(500)
     await browser.eval('window.beforeClick = "abc"')
     await browser.elementByCss('#broken-post').click()
-    await waitFor(1000)
-    expect(await browser.eval('window.beforeClick')).not.toBe('abc')
+    expect(
+      await check(() => browser.eval('window.beforeClick'), {
+        test(v) {
+          return v !== 'abc'
+        },
+      })
+    ).toBe(true)
   })
 
   it('should always call getServerSideProps without caching', async () => {
@@ -455,7 +590,7 @@ const runTests = (dev = false) => {
       await browser.elementByCss('#non-json').click()
 
       await check(
-        () => getBrowserBodyText(browser),
+        () => getRedboxHeader(browser),
         /Error serializing `.time` returned from `getServerSideProps`/
       )
     })
@@ -525,6 +660,7 @@ describe('getServerSideProps', () => {
       stderr = ''
       appPort = await findPort()
       app = await launchApp(appDir, appPort, {
+        env: { __NEXT_TEST_WITH_DEVTOOL: 1 },
         onStderr(msg) {
           stderr += msg
         },
@@ -538,10 +674,9 @@ describe('getServerSideProps', () => {
 
   describe('serverless mode', () => {
     beforeAll(async () => {
-      await fs.writeFile(
-        nextConfig,
-        `module.exports = { target: 'serverless' }`,
-        'utf8'
+      await nextConfig.replace(
+        '// replace me',
+        `target: 'experimental-serverless-trace', `
       )
       await nextBuild(appDir)
       stderr = ''
@@ -553,14 +688,16 @@ describe('getServerSideProps', () => {
       })
       buildId = await fs.readFile(join(appDir, '.next/BUILD_ID'), 'utf8')
     })
-    afterAll(() => killApp(app))
+    afterAll(async () => {
+      await killApp(app)
+      nextConfig.restore()
+    })
 
     runTests()
   })
 
   describe('production mode', () => {
     beforeAll(async () => {
-      await fs.remove(nextConfig)
       await nextBuild(appDir, [], { stdout: true })
 
       appPort = await findPort()

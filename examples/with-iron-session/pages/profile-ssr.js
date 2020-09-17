@@ -1,5 +1,4 @@
-import React from 'react'
-import Layout from '../components/layout'
+import Layout from '../components/Layout'
 import withSession from '../lib/session'
 import PropTypes from 'prop-types'
 
@@ -32,14 +31,14 @@ const SsrProfile = ({ user }) => {
   )
 }
 
-export const getServerSideProps = withSession(async function({ req, res }) {
+export const getServerSideProps = withSession(async function ({ req, res }) {
   const user = req.session.get('user')
 
   if (user === undefined) {
     res.setHeader('location', '/login')
     res.statusCode = 302
     res.end()
-    return
+    return { props: {} }
   }
 
   return {
@@ -50,7 +49,7 @@ export const getServerSideProps = withSession(async function({ req, res }) {
 export default SsrProfile
 
 function githubUrl(login) {
-  return `https://api.github.com/${login}`
+  return `https://api.github.com/users/${login}`
 }
 
 SsrProfile.propTypes = {

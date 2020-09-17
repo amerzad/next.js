@@ -2,6 +2,8 @@
 description: Override and extend the built-in Error page to handle custom errors.
 ---
 
+# Custom Error Page
+
 ## 404 Page
 
 A 404 page may be accessed very often. Server-rendering an error page for every visit increases the load of the Next.js server. This can result in increased costs and slow experiences.
@@ -54,10 +56,9 @@ If you want to render the built-in error page you can by importing the `Error` c
 
 ```jsx
 import Error from 'next/error'
-import fetch from 'node-fetch'
 
 export async function getServerSideProps() {
-  const res = await fetch('https://api.github.com/repos/zeit/next.js')
+  const res = await fetch('https://api.github.com/repos/vercel/next.js')
   const errorCode = res.ok ? false : res.statusCode
   const json = await res.json()
 
@@ -76,3 +77,5 @@ export default function Page({ errorCode, stars }) {
 ```
 
 The `Error` component also takes `title` as a property if you want to pass in a text message along with a `statusCode`.
+
+If you have a custom `Error` component be sure to import that one instead. `next/error` exports the default component used by Next.js.

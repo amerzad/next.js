@@ -8,8 +8,8 @@ This command is meant for static-only hosts, and is not necessary to make your a
 
 #### Possible Ways to Fix It
 
-Use `next build` with platforms that don't require `next export` like https://zeit.co or remove any paths using API routes from your `exportPathMap` in `next.config.js`.
+Use `next build` with platforms that don't require `next export` like https://vercel.com or remove any paths using API routes from your `exportPathMap` in `next.config.js`.
 
 ### Useful Links
 
-- [Static HTML export](https://nextjs.org/docs#static-html-export)
+- [Static HTML export](https://nextjs.org/docs/advanced-features/static-html-export)

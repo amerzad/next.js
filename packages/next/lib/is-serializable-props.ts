@@ -29,9 +29,9 @@ export function isSerializableProps(
         page,
         method,
         path,
-        `Circular references cannot be expressed in JSON (references: \`${visited.get(
-          value
-        ) || '(self)'}\`).`
+        `Circular references cannot be expressed in JSON (references: \`${
+          visited.get(value) || '(self)'
+        }\`).`
       )
     }
 
@@ -72,7 +72,7 @@ export function isSerializableProps(
       visit(refs, value, path)
 
       if (
-        Object.entries(value).every(([key, value]) => {
+        Object.entries(value).every(([key, nestedValue]) => {
           const nextPath = regexpPlainIdentifier.test(key)
             ? `${path}.${key}`
             : `${path}[${JSON.stringify(key)}]`
@@ -80,7 +80,7 @@ export function isSerializableProps(
           const newRefs = new Map(refs)
           return (
             isSerializable(newRefs, key, nextPath) &&
-            isSerializable(newRefs, value, nextPath)
+            isSerializable(newRefs, nestedValue, nextPath)
           )
         })
       ) {
@@ -98,11 +98,16 @@ export function isSerializableProps(
     if (Array.isArray(value)) {
       visit(refs, value, path)
 
+      const seen = new Set<any>()
       const newRefs = new Map(refs)
       if (
-        value.every((value, index) =>
-          isSerializable(newRefs, value, `${path}[${index}]`)
-        )
+        value.every((nestedValue, index) => {
+          if (seen.has(nestedValue)) {
+            return true
+          }
+          seen.add(nestedValue)
+          return isSerializable(newRefs, nestedValue, `${path}[${index}]`)
+        })
       ) {
         return true
       }

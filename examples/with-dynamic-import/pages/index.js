@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import { useState } from 'react'
 import Header from '../components/Header'
 import dynamic from 'next/dynamic'
 
@@ -6,25 +6,24 @@ const DynamicComponent1 = dynamic(() => import('../components/hello1'))
 
 const DynamicComponent2WithCustomLoading = dynamic(
   () => import('../components/hello2'),
-  {
-    loading: () => <p>Loading caused by client page transition ...</p>,
-  }
+  { loading: () => <p>Loading caused by client page transition ...</p> }
 )
 
 const DynamicComponent3WithNoSSR = dynamic(
   () => import('../components/hello3'),
-  {
-    loading: () => <p>Loading ...</p>,
-    ssr: false,
-  }
+  { loading: () => <p>Loading ...</p>, ssr: false }
 )
 
 const DynamicComponent4 = dynamic(() => import('../components/hello4'))
 
 const DynamicComponent5 = dynamic(() => import('../components/hello5'))
 
+const names = ['Tim', 'Joe', 'Bel', 'Max', 'Lee']
+
 const IndexPage = () => {
   const [showMore, setShowMore] = useState(false)
+  const [falsyField] = useState(false)
+  const [results, setResults] = useState()
 
   return (
     <div>
@@ -40,11 +39,28 @@ const IndexPage = () => {
       <DynamicComponent3WithNoSSR />
 
       {/* This component will never be loaded */}
-      {React.noSuchField && <DynamicComponent4 />}
+      {falsyField && <DynamicComponent4 />}
 
       {/* Load on demand */}
       {showMore && <DynamicComponent5 />}
       <button onClick={() => setShowMore(!showMore)}>Toggle Show More</button>
+
+      {/* Load library on demand */}
+      <div style={{ marginTop: '1rem' }}>
+        <input
+          type="text"
+          placeholder="Search"
+          onChange={async (e) => {
+            const { value } = e.currentTarget
+            // Dynamically load fuse.js
+            const Fuse = (await import('fuse.js')).default
+            const fuse = new Fuse(names)
+
+            setResults(fuse.search(value))
+          }}
+        />
+        <pre>Results: {JSON.stringify(results, null, 2)}</pre>
+      </div>
     </div>
   )
 }

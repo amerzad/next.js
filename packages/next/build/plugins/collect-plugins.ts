@@ -1,11 +1,8 @@
 import findUp from 'next/dist/compiled/find-up'
-import fs from 'fs'
+import { promises } from 'fs'
 import path from 'path'
-import { promisify } from 'util'
 import resolve from 'next/dist/compiled/resolve/index.js'
 import { execOnce } from '../../next-server/lib/utils'
-
-const readdir = promisify(fs.readdir)
 
 export type PluginMetaData = {
   requiredEnv: string[]
@@ -20,8 +17,6 @@ export type PluginMetaData = {
 // currently supported middleware
 export const VALID_MIDDLEWARE = [
   'document-head-tags-server',
-  'document-body-tags-server',
-  'document-html-props-server',
   'on-init-client',
   'on-init-server',
   'on-error-server',
@@ -29,9 +24,6 @@ export const VALID_MIDDLEWARE = [
   'on-error-client',
   'on-error-server',
   'babel-preset-build',
-  'unstable-post-hydration',
-  'unstable-get-styles-server',
-  'unstable-enhance-app-server',
 ]
 
 type ENV_OPTIONS = { [name: string]: string }
@@ -65,7 +57,11 @@ async function collectPluginMeta(
   // TODO: add err.sh explaining requirements
   let middleware: string[] = []
   try {
-    middleware = await readdir(path.join(pkgDir, 'src'))
+    middleware = (
+      await promises.readdir(path.join(pkgDir, 'src'), { withFileTypes: true })
+    )
+      .filter((dirent) => dirent.isFile())
+      .map((file) => file.name)
   } catch (err) {
     if (err.code !== 'ENOENT') {
       console.error(err)
@@ -76,7 +72,7 @@ async function collectPluginMeta(
   }
 
   // remove the extension from the middleware
-  middleware = middleware.map(item => {
+  middleware = middleware.map((item) => {
     const parts = item.split('.')
     parts.pop()
     return parts.join('.')
@@ -161,7 +157,7 @@ async function _collectPlugins(
   const hasPluginConfig = Array.isArray(pluginsConfig)
 
   const nextPluginConfigNames = hasPluginConfig
-    ? pluginsConfig!.map(config =>
+    ? pluginsConfig!.map((config) =>
         typeof config === 'string' ? config : config.name
       )
     : null
@@ -191,7 +187,7 @@ async function _collectPlugins(
     // @scope/next-plugin-[name]
     // @next/plugin-[name]
     // next-plugin-[name]
-    const filteredDeps = dependencies.filter(name => {
+    const filteredDeps = dependencies.filter((name) => {
       return name.match(/(^@next\/plugin|next-plugin-)/)
     })
 
@@ -208,7 +204,7 @@ async function _collectPlugins(
   }
 
   const nextPluginMetaData = await Promise.all(
-    nextPluginNames.map(name =>
+    nextPluginNames.map((name) =>
       collectPluginMeta(
         env,
         resolve.sync(path.join(name, 'package.json'), {
@@ -223,7 +219,7 @@ async function _collectPlugins(
     // Add plugin config from `next.config.js`
     if (hasPluginConfig) {
       const curPlugin = pluginsConfig!.find(
-        config =>
+        (config) =>
           config && typeof config === 'object' && config.name === plugin.pkgName
       )
       if (curPlugin && typeof curPlugin === 'object') {

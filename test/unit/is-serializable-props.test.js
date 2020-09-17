@@ -111,7 +111,7 @@ Reason: \`undefined\` cannot be serialized as JSON. Please use \`null\` or omit 
 Reason: \`symbol\` cannot be serialized as JSON. Please only return JSON serializable data types."
 `)
 
-    expect(() => isSerializableProps('/', 'test', { toplevel: function() {} }))
+    expect(() => isSerializableProps('/', 'test', { toplevel: function () {} }))
       .toThrowErrorMatchingInlineSnapshot(`
 "Error serializing \`.toplevel\` returned from \`test\` in \\"/\\".
 Reason: \`function\` cannot be serialized as JSON. Please only return JSON serializable data types."
@@ -147,7 +147,7 @@ Reason: \`symbol\` cannot be serialized as JSON. Please only return JSON seriali
 `)
 
     expect(() =>
-      isSerializableProps('/', 'test', { k: { a: [function() {}] } })
+      isSerializableProps('/', 'test', { k: { a: [function () {}] } })
     ).toThrowErrorMatchingInlineSnapshot(`
 "Error serializing \`.k.a[0]\` returned from \`test\` in \\"/\\".
 Reason: \`function\` cannot be serialized as JSON. Please only return JSON serializable data types."
@@ -274,5 +274,14 @@ Reason: Circular references cannot be expressed in JSON (references: \`.k\`)."
         arr4: [1, [2, 3, arr]],
       })
     ).toBe(true)
+  })
+
+  it('allows identical object instances in an array', () => {
+    const obj = { foo: 'bar' }
+    const arr = [obj, obj]
+    const objWithArr = { deep: { arr } }
+
+    expect(isSerializableProps('/', 'test', { arr })).toBe(true)
+    expect(isSerializableProps('/', 'test', { objWithArr })).toBe(true)
   })
 })

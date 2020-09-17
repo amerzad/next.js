@@ -4,35 +4,25 @@ description: Enable Server-Side Rendering in a page and do initial data populati
 
 # getInitialProps
 
-> **Recommended: [`getStaticProps`](/docs/basic-features/data-fetching.md#getstaticprops-static-generation) or [`getServerSideProps`](/docs/basic-features/data-fetching.md#getserversideprops-server-side-rendering)**
+> **Recommended: [`getStaticProps`](/docs/basic-features/data-fetching.md#getstaticprops-static-generation) or [`getServerSideProps`](/docs/basic-features/data-fetching.md#getserversideprops-server-side-rendering)**.
 >
 > If you're using Next.js 9.3 or newer, we recommend that you use `getStaticProps` or `getServerSideProps` instead of `getInitialProps`.
 >
-> These new data fetching methods allow you to have a granular choice between static generation and server-side rendering.
-> Learn more on the documentation for [Pages](/docs/basic-features/pages.md) and [Data fetching](/docs/basic-features/data-fetching.md):
-
-<details>
-  <summary><b>Examples</b></summary>
-  <ul>
-    <li><a href="https://github.com/zeit/next.js/tree/canary/examples/data-fetch">Data fetch</a></li>
-  </ul>
-</details>
+> These new data fetching methods allow you to have a granular choice between static generation and server-side rendering. Learn more on the documentation for [Pages](/docs/basic-features/pages.md) and [Data fetching](/docs/basic-features/data-fetching.md).
 
 `getInitialProps` enables [server-side rendering](/docs/basic-features/pages.md#server-side-rendering) in a page and allows you to do **initial data population**, it means sending the [page](/docs/basic-features/pages.md) with the data already populated from the server. This is especially useful for [SEO](https://en.wikipedia.org/wiki/Search_engine_optimization).
 
 > `getInitialProps` will disable [Automatic Static Optimization](/docs/advanced-features/automatic-static-optimization.md).
 
-`getInitialProps` is an [`async`](https://zeit.co/blog/async-and-await) function that can be added to any page as a [`static method`](https://javascript.info/static-properties-methods). Take a look at the following example:
+`getInitialProps` is an [`async`](https://vercel.com/blog/async-and-await) function that can be added to any page as a [`static method`](https://javascript.info/static-properties-methods). Take a look at the following example:
 
 ```jsx
-import fetch from 'isomorphic-unfetch'
-
 function Page({ stars }) {
   return <div>Next stars: {stars}</div>
 }
 
-Page.getInitialProps = async ctx => {
-  const res = await fetch('https://api.github.com/repos/zeit/next.js')
+Page.getInitialProps = async (ctx) => {
+  const res = await fetch('https://api.github.com/repos/vercel/next.js')
   const json = await res.json()
   return { stars: json.stargazers_count }
 }
@@ -44,11 +34,10 @@ Or using a class component:
 
 ```jsx
 import React from 'react'
-import fetch from 'isomorphic-unfetch'
 
 class Page extends React.Component {
   static async getInitialProps(ctx) {
-    const res = await fetch('https://api.github.com/repos/zeit/next.js')
+    const res = await fetch('https://api.github.com/repos/vercel/next.js')
     const json = await res.json()
     return { stars: json.stargazers_count }
   }
@@ -65,7 +54,7 @@ export default Page
 
 Data returned from `getInitialProps` is serialized when server rendering, similar to what [`JSON.stringify`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/JSON/stringify) does. Make sure the returned object from `getInitialProps` is a plain `Object` and not using `Date`, `Map` or `Set`.
 
-For the initial page load, `getInitialProps` will execute on the server only. `getInitialProps` will only be executed on the client when navigating to a different route via the [`next/link`](/docs/api-reference/next/link.md) component or by using [`next/router`](/docs/api-reference/next/router.md).
+For the initial page load, `getInitialProps` will run on the server only. `getInitialProps` will then run on the client when navigating to a different route via the [`next/link`](/docs/api-reference/next/link.md) component or by using [`next/router`](/docs/api-reference/next/router.md).
 
 ## Context Object
 
@@ -74,8 +63,8 @@ For the initial page load, `getInitialProps` will execute on the server only. `g
 - `pathname` - Current route. That is the path of the page in `/pages`
 - `query` - Query string section of URL parsed as an object
 - `asPath` - `String` of the actual path (including the query) shown in the browser
-- `req` - HTTP request object (server only)
-- `res` - HTTP response object (server only)
+- `req` - [HTTP request object](https://nodejs.org/api/http.html#http_class_http_incomingmessage 'Class: http.IncomingMessage HTTP | Node.js v14.8.0 Documentation') (server only)
+- `res` - [HTTP response object](https://nodejs.org/api/http.html#http_class_http_serverresponse 'Class: http.ServerResponse HTTP | Node.js v14.8.0 Documentation') (server only)
 - `err` - Error object if any error is encountered during the rendering
 
 ## Caveats
@@ -85,7 +74,7 @@ For the initial page load, `getInitialProps` will execute on the server only. `g
 
 ## TypeScript
 
-If you're using TypeScript, you can use the `NextPage` type for functional components:
+If you're using TypeScript, you can use the `NextPage` type for function components:
 
 ```jsx
 import { NextPage } from 'next'
